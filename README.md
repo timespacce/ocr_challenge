@@ -1,3 +1,4 @@
+
 ###OCR Challenge with Convolutional Neural Network
 
 #### Data preparation
