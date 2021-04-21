@@ -17,8 +17,8 @@ optimizer: tf.keras.optimizers.Optimizer
 
 ##
 
-buffer_size = 32
-batch_size = 32
+buffer_size = 34138
+batch_size = 64
 label_length = 6
 vocab_size = 37
 epochs = 100
@@ -43,7 +43,7 @@ def run():
 
 
 def load_data(target):
-    global buffer_size, vocabulary, vocab_size, label_length, token_to_id, id_to_token
+    global buffer_size, vocabulary, vocab_size, batch_size, label_length, token_to_id, id_to_token
     ##
     zip_file = zipfile.ZipFile(target, "r")
     namelist = zip_file.namelist()
@@ -61,6 +61,7 @@ def load_data(target):
         else:
             test_count += 1
         ##
+    buffer_size = int(buffer_size / batch_size) * batch_size
     train_count = min(buffer_size, train_count)
     test_count = min(buffer_size, test_count)
     train_inputs, train_labels = np.zeros((train_count, h, w, 3), dtype=np.float32), np.zeros((train_count, label_length), dtype=np.int32)

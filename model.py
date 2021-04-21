@@ -1,9 +1,33 @@
 import tensorflow as tf
 
 
+class ConvBlock(tf.keras.layers.Layer):
+    filter_count = None
+
+    ##
+    def __init__(self, filter_count):
+        super(ConvBlock, self).__init__()
+        ##
+        self.filter_count = filter_count
+        ##
+        self.conv = tf.keras.layers.Conv2D(self.filter_count, kernel_size=(2, 2), strides=(2, 2))
+        self.bn = tf.keras.layers.BatchNormalization(axis=-1)
+        self.relu = tf.keras.layers.LeakyReLU()
+        ##
+
+    def call(self, inputs, training=None):
+        ffn = inputs
+        ffn = self.conv(ffn)
+        ffn = self.bn(ffn)
+        ffn = self.relu(ffn)
+        return ffn
+
+
 class OCRModel(tf.keras.Model):
     vocab_size = None
     filter_count = None
+    num_layers = None
+    layers = []
 
     ##
     def __init__(self, label_length, vocab_size):
@@ -11,16 +35,11 @@ class OCRModel(tf.keras.Model):
         self.label_length = label_length
         self.vocab_size = vocab_size
         self.filter_count = 32
+        self.num_layers = 2
         ##
-        self.conv_1 = tf.keras.layers.Conv2D(self.filter_count, kernel_size=(2, 2), strides=(2, 2))
-        self.bn_1 = tf.keras.layers.BatchNormalization(axis=-1)
-        self.relu_1 = tf.keras.layers.LeakyReLU()
-        self.conv_2 = tf.keras.layers.Conv2D(self.filter_count, kernel_size=(2, 2), strides=(2, 2))
-        self.bn_2 = tf.keras.layers.BatchNormalization(axis=-1)
-        self.relu_2 = tf.keras.layers.LeakyReLU()
-        self.conv_3 = tf.keras.layers.Conv2D(self.filter_count, kernel_size=(2, 2), strides=(2, 2))
-        self.bn_3 = tf.keras.layers.BatchNormalization(axis=-1)
-        self.relu_3 = tf.keras.layers.LeakyReLU()
+        for i in range(self.num_layers):
+            layer = ConvBlock(self.filter_count)
+            self.layers.append(layer)
         ##
         self.conv4 = tf.keras.layers.Conv2D(self.label_length, kernel_size=(2, 2), padding='same')  # (B, X, Y, LABEL)
         ##
@@ -33,15 +52,8 @@ class OCRModel(tf.keras.Model):
         ffn = inputs
         batch_size, _, _, _ = ffn.shape
         ##
-        ffn = self.conv_1(ffn)
-        ffn = self.bn_1(ffn)
-        ffn = self.relu_1(ffn)
-        ffn = self.conv_2(ffn)
-        ffn = self.bn_2(ffn)
-        ffn = self.relu_2(ffn)
-        ffn = self.conv_3(ffn)
-        ffn = self.bn_3(ffn)
-        ffn = self.relu_3(ffn)
+        for i in range(self.num_layers):
+            ffn = self.layers[i](ffn)
         ##
         ffn = self.conv4(ffn)  # (B, X, Y, LABEL)
         ffn = tf.transpose(ffn, perm=[0, 3, 1, 2])  # (B, LABEL, X, Y)
