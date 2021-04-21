@@ -23,9 +23,9 @@ buffer_size = 34800
 batch_size = 128
 label_length = 6
 vocab_size = 37
-epochs = 20
+epochs = 0
 steps = None
-alpha = 1e-3
+alpha = 1e-4
 eager = False
 
 vocabulary = []
@@ -144,9 +144,10 @@ def build_model():
     checkpoint = tf.train.Checkpoint(model=model)
     checkpoint_manager = tf.train.CheckpointManager(checkpoint, directory="./checkpoints/model", max_to_keep=5)
     if checkpoint_manager.latest_checkpoint:
-        status = checkpoint.restore(checkpoint_manager.latest_checkpoint)
+        selected_checkpoint = checkpoint_manager.checkpoints[1]
+        status = checkpoint.restore(selected_checkpoint)
         status.assert_consumed()
-        print("Restored from {}".format("checkpoints/model"))
+        print("Restored from {}".format(selected_checkpoint))
     else:
         print("Initializing from scratch.")
     ##
@@ -185,19 +186,22 @@ def train_model():
 
     def run_inference(inputs, labels, mode):
         data_set = load_and_shuffle(xs=inputs, ys=labels)
-        count, all_correct = 0, 0
+        count, _, _, _ = inputs.shape
+        index, all_correct = 0, 0
         validations = []
         row_format = "{0} : {1} : {2:.3f}\n"
         for x, y in data_set:
             y_hat = inference_step(x)
             y_hat_labels = tf.argmax(y_hat, axis=-1)
+            print("\r", end="")
+            print("INFERENCE : {:.1f}% ".format((index / count) * 1e2), end="", flush=True)
             ##
             for x_i, y_i in zip(y_hat_labels, y):
                 x_i, y_i = x_i.numpy(), y_i.numpy()
                 diff = tf.abs(tf.cast(y_i, tf.int64) - x_i)
                 diff_sum = tf.reduce_sum(diff).numpy()
                 correct = int(diff_sum == 0)
-                count, all_correct = count + 1, all_correct + correct
+                index, all_correct = index + 1, all_correct + correct
                 validations.append((x_i, y_i, diff_sum))
         ##
         s = open("validation_{}.txt".format(mode), 'w')
