@@ -17,12 +17,13 @@ optimizer: tf.keras.optimizers.Optimizer
 
 ##
 
-buffer_size = 34138
-batch_size = 64
+buffer_size = 34318
+batch_size = 512
 label_length = 6
 vocab_size = 37
-epochs = 100
-alpha = 1e-2
+epochs = 25
+steps = None
+alpha = 1e-3
 
 vocabulary = []
 token_to_id = {}
@@ -43,7 +44,7 @@ def run():
 
 
 def load_data(target):
-    global buffer_size, vocabulary, vocab_size, batch_size, label_length, token_to_id, id_to_token
+    global buffer_size, steps, vocabulary, vocab_size, label_length, token_to_id, id_to_token
     ##
     zip_file = zipfile.ZipFile(target, "r")
     namelist = zip_file.namelist()
@@ -60,11 +61,13 @@ def load_data(target):
             train_count += 1
         else:
             test_count += 1
-        ##
-    buffer_size = int(buffer_size / batch_size) * batch_size
+    ##
+    buffer_size = int(buffer_size // batch_size) * batch_size
+    steps = buffer_size // batch_size
     train_count = min(buffer_size, train_count)
     test_count = min(buffer_size, test_count)
-    train_inputs, train_labels = np.zeros((train_count, h, w, 3), dtype=np.float32), np.zeros((train_count, label_length), dtype=np.int32)
+    train_inputs, train_labels = np.zeros((train_count, h, w, 3), dtype=np.float32), np.zeros(
+        (train_count, label_length), dtype=np.int32)
     test_inputs, test_labels = np.zeros((test_count, h, w, 3), dtype=np.float32), np.zeros((test_count, label_length), dtype=np.int32)
     ##
     vocabulary = list(string.ascii_uppercase) + list(map(str, range(0, 10))) + ["-"]
@@ -110,8 +113,11 @@ def load_data(target):
 def load_and_shuffle(xs, ys):
     global buffer_size, batch_size
     ##
-    xs = xs[:buffer_size]
-    ys = ys[:buffer_size]
+    count, _, _, _ = xs.shape
+    indices = np.arange(count)
+    np.random.shuffle(indices)
+    xs = xs[indices]
+    ys = ys[indices]
     ##
     tf_xs = tf.data.Dataset.from_tensor_slices(xs)
     tf_ys = tf.data.Dataset.from_tensor_slices(ys)
@@ -141,7 +147,7 @@ def loss_function(y_hat, y):
 
 
 def train_model():
-    global model, epochs, id_to_token
+    global model, epochs, steps, id_to_token
     ##
     (train_inputs, train_labels), (test_inputs, test_labels) = load_data("data/synthetic_dataset.zip")
 
@@ -169,8 +175,10 @@ def train_model():
         for x, y in sub_data_set:
             l1 = train_step(x, y)
             acc_l1, batch = acc_l1 + l1, batch + 1
+            print("\r", end="")
+            print("E = {} : {:.1f}% ".format(e, (batch / steps) * 1e2), end="", flush=True)
         avg_l1 = acc_l1 / batch
-        print("E={0:>2} : L1={1:3f}".format(e, avg_l1))
+        print(" L1={1:3f}".format(e, avg_l1))
 
     ##
 
