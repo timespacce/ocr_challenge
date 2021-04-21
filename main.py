@@ -7,23 +7,26 @@ import tensorflow as tf
 from model import OCRModel
 import os
 import matplotlib.pyplot as plt
-from PIL import Image
+from PIL import Image, ImageOps
 
 ##
 
 model: tf.keras.Model
 cat_cross_ent: tf.keras.losses.Loss
 optimizer: tf.keras.optimizers.Optimizer
+checkpoint: tf.train.Checkpoint
+checkpoint_manager: tf.train.CheckpointManager
 
 ##
-
-buffer_size = 34318
-batch_size = 512
+h, w = 64, 128
+buffer_size = 34800
+batch_size = 128
 label_length = 6
 vocab_size = 37
-epochs = 25
+epochs = 20
 steps = None
 alpha = 1e-3
+eager = False
 
 vocabulary = []
 token_to_id = {}
@@ -34,9 +37,11 @@ id_to_token = {}
 
 
 def run():
+    global eager
     ##
-    tf.config.experimental_run_functions_eagerly(True)
-    tf.executing_eagerly()
+    if eager:
+        tf.config.run_functions_eagerly(True)
+        tf.executing_eagerly()
     ##
     build_model()
     train_model()
@@ -49,7 +54,6 @@ def load_data(target):
     zip_file = zipfile.ZipFile(target, "r")
     namelist = zip_file.namelist()
     train_count, test_count, label_length = 0, 0, 0
-    h, w = 128, 64
     for file in namelist:
         if not file.endswith('.png'):
             continue
@@ -66,8 +70,7 @@ def load_data(target):
     steps = buffer_size // batch_size
     train_count = min(buffer_size, train_count)
     test_count = min(buffer_size, test_count)
-    train_inputs, train_labels = np.zeros((train_count, h, w, 3), dtype=np.float32), np.zeros(
-        (train_count, label_length), dtype=np.int32)
+    train_inputs, train_labels = np.zeros((train_count, h, w, 3), dtype=np.float32), np.zeros((train_count, label_length), dtype=np.int32)
     test_inputs, test_labels = np.zeros((test_count, h, w, 3), dtype=np.float32), np.zeros((test_count, label_length), dtype=np.int32)
     ##
     vocabulary = list(string.ascii_uppercase) + list(map(str, range(0, 10))) + ["-"]
@@ -92,6 +95,7 @@ def load_data(target):
         image = Image.open(image_file)
         image_resized = image.resize((w, h))
         image_normalized = np.array(image_resized) / 255
+        image_normalized = image_normalized.reshape((h, w, 3))
         label_tokenized = [token_to_id[i] for i in label]
         if train:
             train_inputs[train_count] = image_normalized
@@ -128,11 +132,23 @@ def load_and_shuffle(xs, ys):
 
 
 def build_model():
-    global vocab_size, label_length, model, cat_cross_ent, optimizer, alpha
+    global vocab_size, label_length, model, cat_cross_ent, optimizer, batch_size, alpha, checkpoint, checkpoint_manager
     ##
-    model = OCRModel(label_length=label_length, vocab_size=vocab_size)
+    model = OCRModel(label_length=label_length, vocab_size=vocab_size, filter_size=32, num_layers=3, hidden_size=512)
+    model.build(input_shape=(batch_size, h, w, 3))
+    model.summary()
+    ##
     cat_cross_ent = tf.keras.losses.CategoricalCrossentropy(reduction='none')
-    optimizer = tf.keras.optimizers.Adam(learning_rate=alpha, beta_1=0.9, beta_2=0.98, epsilon=1e-6)
+    optimizer = tf.keras.optimizers.Adam(learning_rate=alpha)
+    ##
+    checkpoint = tf.train.Checkpoint(model=model)
+    checkpoint_manager = tf.train.CheckpointManager(checkpoint, directory="./checkpoints/model", max_to_keep=5)
+    if checkpoint_manager.latest_checkpoint:
+        status = checkpoint.restore(checkpoint_manager.latest_checkpoint)
+        status.assert_consumed()
+        print("Restored from {}".format("checkpoints/model"))
+    else:
+        print("Initializing from scratch.")
     ##
     return
 
@@ -147,7 +163,7 @@ def loss_function(y_hat, y):
 
 
 def train_model():
-    global model, epochs, steps, id_to_token
+    global model, epochs, steps, id_to_token, checkpoint, checkpoint_manager
     ##
     (train_inputs, train_labels), (test_inputs, test_labels) = load_data("data/synthetic_dataset.zip")
 
@@ -166,21 +182,6 @@ def train_model():
     def inference_step(x):
         y_hat = model(x)
         return y_hat
-
-    ##
-    for e in range(epochs):
-        acc_l1, batch = 0, 0
-        sub_data_set = load_and_shuffle(xs=train_inputs, ys=train_labels)
-        ##
-        for x, y in sub_data_set:
-            l1 = train_step(x, y)
-            acc_l1, batch = acc_l1 + l1, batch + 1
-            print("\r", end="")
-            print("E = {} : {:.1f}% ".format(e, (batch / steps) * 1e2), end="", flush=True)
-        avg_l1 = acc_l1 / batch
-        print(" L1={1:3f}".format(e, avg_l1))
-
-    ##
 
     def run_inference(inputs, labels, mode):
         data_set = load_and_shuffle(xs=inputs, ys=labels)
@@ -207,6 +208,26 @@ def train_model():
         s.close()
         percent = (all_correct / count) * 1e2
         print("{} : {} / {} or {:.3f} %".format(mode, all_correct, count, percent))
+
+    ##
+    for e in range(epochs):
+        acc_l1, batch = 0, 0
+        sub_data_set = load_and_shuffle(xs=train_inputs, ys=train_labels)
+        ##
+        for x, y in sub_data_set:
+            l1 = train_step(x, y)
+            acc_l1, batch = acc_l1 + l1, batch + 1
+            print("\r", end="")
+            print("E = {} : {:.1f}% ".format(e, (batch / steps) * 1e2), end="", flush=True)
+        avg_l1 = acc_l1 / batch
+        print(" L1={1:3f}".format(e, avg_l1))
+        ##
+        if (e + 1) % 5 == 0:
+            saved_checkpoint = checkpoint_manager.save()
+            print("checkpoint saved at {}".format(saved_checkpoint))
+        ##
+        if (e + 1) % 5 == 0:
+            run_inference(test_inputs, test_labels, "TEST")
 
     ##
     run_inference(train_inputs, train_labels, "TRAIN")
