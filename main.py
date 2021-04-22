@@ -164,7 +164,7 @@ def loss_function(y_hat, y):
 
 
 def train_model():
-    global model, epochs, steps, id_to_token, checkpoint, checkpoint_manager
+    global model, epochs, batch_size, steps, id_to_token, checkpoint, checkpoint_manager
     ##
     (train_inputs, train_labels), (test_inputs, test_labels) = load_data("data/synthetic_dataset.zip")
 
@@ -202,12 +202,13 @@ def train_model():
                 diff_sum = tf.reduce_sum(diff).numpy()
                 correct = int(diff_sum == 0)
                 index, all_correct = index + 1, all_correct + correct
+                x_i, y_i = [id_to_token[i] for i in x_i], [id_to_token[i] for i in y_i]
                 validations.append((x_i, y_i, diff_sum))
         ##
         s = open("validation_{}.txt".format(mode), 'w')
         validations.sort(key=lambda x: x[2])
         for x_i, y_i, acc in validations:
-            row = row_format.format(x_i, y_i, acc)
+            row = row_format.format(''.join(x_i), ''.join(y_i), acc)
             s.write(row)
         s.close()
         percent = (all_correct / count) * 1e2
@@ -221,8 +222,9 @@ def train_model():
         for x, y in sub_data_set:
             l1 = train_step(x, y)
             acc_l1, batch = acc_l1 + l1, batch + 1
+            avg_l1 = acc_l1 / batch
             print("\r", end="")
-            print("E = {} : {:.1f}% ".format(e, (batch / steps) * 1e2), end="", flush=True)
+            print("E = {} : {:.1f}% : {:.1f} ".format(e, (batch / steps) * 1e2, avg_l1), end="", flush=True)
         avg_l1 = acc_l1 / batch
         print(" L1={1:3f}".format(e, avg_l1))
         ##
