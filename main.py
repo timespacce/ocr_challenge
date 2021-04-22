@@ -23,7 +23,9 @@ data_dir = None
 checkpoint_dir = None
 ##
 h, w = 64, 128
-buffer_size = 34800
+train_buffer_size = 34800
+test_buffer_size = 5509
+blocks = 4
 batch_size = 128
 label_length = 6
 vocab_size = 37
@@ -55,7 +57,7 @@ def run():
 
 
 def load_data():
-    global data_dir, buffer_size, steps, vocabulary, vocab_size, label_length, token_to_id, id_to_token
+    global data_dir, train_buffer_size, test_buffer_size, steps, vocabulary, vocab_size, label_length, token_to_id, id_to_token
     ##
     zip_file = zipfile.ZipFile(data_dir, "r")
     namelist = zip_file.namelist()
@@ -72,12 +74,13 @@ def load_data():
         else:
             test_count += 1
     ##
-    buffer_size = int(buffer_size // batch_size) * batch_size
-    steps = buffer_size // batch_size
-    train_count = min(buffer_size, train_count)
-    test_count = min(buffer_size, test_count)
-    train_inputs, train_labels = np.zeros((train_count, h, w, 3), dtype=np.float32), np.zeros((train_count, label_length), dtype=np.int32)
-    test_inputs, test_labels = np.zeros((test_count, h, w, 3), dtype=np.float32), np.zeros((test_count, label_length), dtype=np.int32)
+    train_buffer_size = min(train_buffer_size, train_count)
+    test_buffer_size = min(test_buffer_size, test_count)
+    train_buffer_size = int(train_buffer_size // batch_size) * batch_size
+    test_buffer_size = int(test_buffer_size // batch_size) * batch_size
+    steps = train_buffer_size // batch_size
+    train_inputs, train_labels = np.zeros((train_buffer_size, h, w, 3), dtype=np.float32), np.zeros((train_buffer_size, label_length), dtype=np.int32)
+    test_inputs, test_labels = np.zeros((test_buffer_size, h, w, 3), dtype=np.float32), np.zeros((test_buffer_size, label_length), dtype=np.int32)
     ##
     vocabulary = list(string.ascii_uppercase) + list(map(str, range(0, 10))) + ["-"]
     for i, token in enumerate(vocabulary):
@@ -91,9 +94,9 @@ def load_data():
             continue
         train = "train" in file
         ##
-        if train_count == buffer_size and train:
+        if train_count == train_buffer_size and train:
             continue
-        if test_count == buffer_size and not train:
+        if test_count == test_buffer_size and not train:
             continue
         ##
         label, img_id = file.split("/")[-1].split("_")
@@ -121,7 +124,7 @@ def load_data():
 
 
 def load_and_shuffle(xs, ys):
-    global buffer_size, batch_size
+    global batch_size
     ##
     count, _, _, _ = xs.shape
     indices = np.arange(count)
@@ -132,7 +135,7 @@ def load_and_shuffle(xs, ys):
     tf_xs = tf.data.Dataset.from_tensor_slices(xs)
     tf_ys = tf.data.Dataset.from_tensor_slices(ys)
     tf_data_set = tf.data.Dataset.zip((tf_xs, tf_ys))
-    tf_data_set = tf_data_set.shuffle(buffer_size=buffer_size, reshuffle_each_iteration=True)
+    tf_data_set = tf_data_set.shuffle(buffer_size=count, reshuffle_each_iteration=True)
     tf_data_set = tf_data_set.batch(batch_size=batch_size)
     return tf_data_set
 
@@ -170,7 +173,7 @@ def loss_function(y_hat, y):
 
 
 def train_model():
-    global model, epochs, batch_size, steps, id_to_token, checkpoint, checkpoint_manager
+    global model, epochs, blocks, batch_size, steps, id_to_token, checkpoint, checkpoint_manager
     ##
     (train_inputs, train_labels), (test_inputs, test_labels) = load_data()
 
@@ -191,25 +194,27 @@ def train_model():
         return y_hat
 
     def run_inference(inputs, labels, mode):
-        data_set = load_and_shuffle(xs=inputs, ys=labels)
         count, _, _, _ = inputs.shape
         index, all_correct = 0, 0
         validations = []
         row_format = "{0} : {1} : {2:.3f}\n"
-        for x, y in data_set:
-            y_hat = inference_step(x)
-            y_hat_labels = tf.argmax(y_hat, axis=-1)
-            print("\r", end="")
-            print("INFERENCE : {:.1f}% ".format((index / count) * 1e2), end="", flush=True)
-            ##
-            for x_i, y_i in zip(y_hat_labels, y):
-                x_i, y_i = x_i.numpy(), y_i.numpy()
-                diff = tf.abs(tf.cast(y_i, tf.int64) - x_i)
-                diff_sum = tf.reduce_sum(diff).numpy()
-                correct = int(diff_sum == 0)
-                index, all_correct = index + 1, all_correct + correct
-                x_i, y_i = [id_to_token[i] for i in x_i], [id_to_token[i] for i in y_i]
-                validations.append((x_i, y_i, diff_sum))
+        block_size = count // blocks
+        for i in range(1, blocks + 1):
+            data_set = load_and_shuffle(xs=inputs[(i - 1) * block_size:i * block_size],
+                                        ys=labels[(i - 1) * block_size:i * block_size])
+            for x, y in data_set:
+                y_hat = inference_step(x)
+                y_hat_labels = tf.argmax(y_hat, axis=-1)
+                for x_i, y_i in zip(y_hat_labels, y):
+                    x_i, y_i = x_i.numpy(), y_i.numpy()
+                    diff = tf.abs(tf.cast(y_i, tf.int64) - x_i)
+                    diff_sum = tf.reduce_sum(diff).numpy()
+                    index = index + 1
+                    x_i, y_i = [id_to_token[j] for j in x_i], [id_to_token[j] for j in y_i]
+                    validations.append((x_i, y_i, diff_sum))
+                ##
+                print("\r", end="")
+                print("{:>5} INFERENCE : {:>5} / {:>5} ".format(mode, index, count), end="", flush=True)
         ##
         s = open("validation_{}.txt".format(mode), 'w')
         validations.sort(key=lambda x: x[2])
@@ -217,20 +222,30 @@ def train_model():
             row = row_format.format(''.join(x_i), ''.join(y_i), acc)
             s.write(row)
         s.close()
-        percent = (all_correct / count) * 1e2
-        print("{} : {} / {} or {:.3f} %".format(mode, all_correct, count, percent))
+        ##
+        validations = np.array(validations, dtype=np.object)
+        recall_1 = (validations[:, 2] == 0).sum()
+        recall_2 = recall_1 + (validations[:, 2] == 1).sum()
+        recall_3 = recall_2 + (validations[:, 2] == 2).sum()
+        ##
+        percent_1, percent_2, percent_3 = (recall_1 / index) * 1e2, (recall_2 / index) * 1e2, (recall_3 / index) * 1e2
+        print("{:>5} : samples = {:>5} / {:>5} : correct = {:.1f} % recall@1 = {:.1f} % recall@2 = {:.1f} %".format(mode, recall_1, index,
+                                                                                                                    percent_1, percent_2, percent_3))
 
     ##
     for e in range(epochs):
         acc_l1, batch = 0, 0
-        sub_data_set = load_and_shuffle(xs=train_inputs, ys=train_labels)
-        ##
-        for x, y in sub_data_set:
-            l1 = train_step(x, y)
-            acc_l1, batch = acc_l1 + l1, batch + 1
-            avg_l1 = acc_l1 / batch
-            print("\r", end="")
-            print("E = {} : {:.1f}% : {:.1f} ".format(e, (batch / steps) * 1e2, avg_l1), end="", flush=True)
+        block_size = train_buffer_size // blocks
+        for i in range(1, blocks + 1):
+            sub_data_set = load_and_shuffle(xs=train_inputs[(i - 1) * block_size:i * block_size],
+                                            ys=train_labels[(i - 1) * block_size:i * block_size])
+            ##
+            for x, y in sub_data_set:
+                l1 = train_step(x, y)
+                acc_l1, batch = acc_l1 + l1, batch + 1
+                avg_l1 = acc_l1 / batch
+                print("\r", end="")
+                print("E = {} : {:.1f}% : {:.1f} ".format(e, (batch / steps) * 1e2, avg_l1), end="", flush=True)
         avg_l1 = acc_l1 / batch
         print(" L1={1:3f}".format(e, avg_l1))
         ##
