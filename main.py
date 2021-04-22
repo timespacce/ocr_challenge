@@ -1,4 +1,5 @@
 import string
+import sys
 import time
 import zipfile
 
@@ -17,6 +18,9 @@ optimizer: tf.keras.optimizers.Optimizer
 checkpoint: tf.train.Checkpoint
 checkpoint_manager: tf.train.CheckpointManager
 
+##
+data_dir = None
+checkpoint_dir = None
 ##
 h, w = 64, 128
 buffer_size = 34800
@@ -37,7 +41,9 @@ id_to_token = {}
 
 
 def run():
-    global eager
+    global data_dir, checkpoint_dir, eager
+    ##
+    data_dir, checkpoint_dir = sys.argv[1], sys.argv[2]
     ##
     if eager:
         tf.config.run_functions_eagerly(True)
@@ -48,10 +54,10 @@ def run():
     return
 
 
-def load_data(target):
-    global buffer_size, steps, vocabulary, vocab_size, label_length, token_to_id, id_to_token
+def load_data():
+    global data_dir, buffer_size, steps, vocabulary, vocab_size, label_length, token_to_id, id_to_token
     ##
-    zip_file = zipfile.ZipFile(target, "r")
+    zip_file = zipfile.ZipFile(data_dir, "r")
     namelist = zip_file.namelist()
     train_count, test_count, label_length = 0, 0, 0
     for file in namelist:
@@ -132,7 +138,7 @@ def load_and_shuffle(xs, ys):
 
 
 def build_model():
-    global vocab_size, label_length, model, cat_cross_ent, optimizer, batch_size, alpha, checkpoint, checkpoint_manager
+    global checkpoint_dir, vocab_size, label_length, model, cat_cross_ent, optimizer, batch_size, alpha, checkpoint, checkpoint_manager
     ##
     model = OCRModel(label_length=label_length, vocab_size=vocab_size, filter_size=32, num_layers=3, hidden_size=512)
     model.build(input_shape=(batch_size, h, w, 3))
@@ -142,7 +148,7 @@ def build_model():
     optimizer = tf.keras.optimizers.Adam(learning_rate=alpha)
     ##
     checkpoint = tf.train.Checkpoint(model=model)
-    checkpoint_manager = tf.train.CheckpointManager(checkpoint, directory="./checkpoints/model", max_to_keep=5)
+    checkpoint_manager = tf.train.CheckpointManager(checkpoint, directory=checkpoint_dir, max_to_keep=5)
     if checkpoint_manager.latest_checkpoint:
         selected_checkpoint = checkpoint_manager.checkpoints[1]
         status = checkpoint.restore(selected_checkpoint)
@@ -166,7 +172,7 @@ def loss_function(y_hat, y):
 def train_model():
     global model, epochs, batch_size, steps, id_to_token, checkpoint, checkpoint_manager
     ##
-    (train_inputs, train_labels), (test_inputs, test_labels) = load_data("data/synthetic_dataset.zip")
+    (train_inputs, train_labels), (test_inputs, test_labels) = load_data()
 
     ##
     @tf.function
